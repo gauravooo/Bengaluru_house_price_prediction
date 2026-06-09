@@ -1,36 +1,69 @@
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from pathlib import Path
+
 import json
 import pickle
 import pandas as pd
-from typing import Literal, Annotated
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field, validator
 from fastapi.responses import JSONResponse
 
-with open("banglore_home_prices_model.pickle", "rb") as f:
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "banglore_home_prices_model.pickle"
+COLUMNS_PATH = BASE_DIR / "columns.json"
+
+with MODEL_PATH.open("rb") as f:
     model = pickle.load(f)
 
-with open("columns.json", "r") as f:
-    data_columns = json.load(f)['data_columns']
+with COLUMNS_PATH.open("r", encoding="utf-8") as f:
+    data_columns = json.load(f)["data_columns"]
 
-app = FastAPI()
+BASE_FEATURES = {"total_sqft", "bath", "balcony", "bhk"}
+LOCATIONS = [col for col in data_columns if col not in BASE_FEATURES]
+
+app = FastAPI(title="Bangalore House Price Prediction API")
 
 class HomeData(BaseModel):
-    location: Annotated[Literal[tuple(data_columns)], Field(...,description="Location of the home")]
-    total_sqft: Annotated[float, Field(...,gt=0, description="Total square footage")]
-    bath: Annotated[int, Field(...,gt=0, description="Number of bathrooms")]
-    bhk: Annotated[int, Field(...,gt=0, description="Number of bedrooms")]
-    balcony: Annotated[int, Field(...,gt=0, description="Number of balconies")]
+    location: str = Field(..., description="Location of the home")
+    total_sqft: float = Field(..., gt=0, description="Total square footage")
+    bath: int = Field(..., gt=0, description="Number of bathrooms")
+    bhk: int = Field(..., gt=0, description="Number of bedrooms")
+    balcony: int = Field(..., ge=0, description="Number of balconies")
 
-@app.post("/predict_price")
+    @validator("location")
+    def validate_location(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        candidate = next((loc for loc in LOCATIONS if loc.lower() == normalized), None)
+        if not candidate:
+            raise ValueError("Location must be one of the supported Bangalore locations")
+        return candidate
+
+
+def build_feature_vector(data: HomeData) -> pd.DataFrame:
+    features = {column: 0 for column in data_columns}
+    features["total_sqft"] = data.total_sqft
+    features["bath"] = data.bath
+    features["balcony"] = data.balcony
+    features["bhk"] = data.bhk
+    features[data.location] = 1
+    return pd.DataFrame([features], columns=data_columns)
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+
+@app.get("/locations")
+def get_locations():
+    return {"locations": LOCATIONS}
+
+
+@app.post("/predict")
 def predict_price(data: HomeData):
-    input_df = pd.DataFrame([{
-        'total_sqft': data.total_sqft,
-        'bath': data.bath,
-        'balcony': data.balcony,
-        'bhk': data.bhk
-    }])
-    location_index = data_columns.index(data.location)
-    input_df = pd.concat([input_df, pd.get_dummies([data.location], prefix='location')], axis=1)
-    input_df = input_df.reindex(columns=data_columns, fill_value=0)
+    try:
+        input_df = build_feature_vector(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
     predicted_price = model.predict(input_df)[0]
-    return JSONResponse(status_code=200, content={"predicted_price": predicted_price})
+    return JSONResponse(status_code=200, content={"predicted_price": float(predicted_price)})
