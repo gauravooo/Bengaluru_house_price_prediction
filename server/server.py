@@ -1,11 +1,15 @@
 from pathlib import Path
-
 import json
 import pickle
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, validator
 from fastapi.responses import JSONResponse
+
+# Pydantic v2 uses field_validator; v1 uses validator.
+try:
+    from pydantic import BaseModel, Field, field_validator as validator
+except ImportError:
+    from pydantic import BaseModel, Field, validator
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "banglore_home_prices_model.pickle"
