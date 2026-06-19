@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 import json
+from pathlib import Path
+import os
 
 # Page configuration
 st.set_page_config(
@@ -16,23 +18,73 @@ API_URL = "http://localhost:8000"
 st.title("🏠 Bangalore House Price Predictor")
 st.markdown("---")
 
-# Load locations
+# Sidebar: settings and examples
+st.sidebar.title("Settings")
+api_url = st.sidebar.text_input("Backend API URL", API_URL)
+use_local_fallback = st.sidebar.checkbox("Use local locations fallback", value=True)
+st.sidebar.markdown("---")
+st.sidebar.subheader("Examples")
+if "location" not in st.session_state:
+    st.session_state.location = None
+if "bhk" not in st.session_state:
+    st.session_state.bhk = 2
+if "total_sqft" not in st.session_state:
+    st.session_state.total_sqft = 1000.0
+if "bath" not in st.session_state:
+    st.session_state.bath = 2
+if "balcony" not in st.session_state:
+    st.session_state.balcony = 1
+
+if st.sidebar.button("Example: 2BHK, 1000 sqft"):
+    st.session_state.bhk = 2
+    st.session_state.total_sqft = 1000.0
+    st.session_state.bath = 2
+    st.session_state.balcony = 1
+
+if st.sidebar.button("Example: 4BHK, 2000 sqft"):
+    st.session_state.bhk = 4
+    st.session_state.total_sqft = 2000.0
+    st.session_state.bath = 3
+    st.session_state.balcony = 2
+
+# Load locations (try API first, then fallback to local columns.json)
 @st.cache_data
-def load_locations():
+def load_locations(api_url, allow_local=True):
+    # Try backend
     try:
-        response = requests.get(f"{API_URL}/locations", timeout=5)
+        response = requests.get(f"{api_url}/locations", timeout=5)
         if response.status_code == 200:
             data = response.json()
             return sorted(data.get("locations", []))
-    except:
+    except Exception:
         pass
+
+    # Fallback to local file
+    if allow_local:
+        try:
+            base = Path(__file__).resolve().parents[1]
+            columns_file = base / "server" / "columns.json"
+            if columns_file.exists():
+                with open(columns_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    cols = data.get("data_columns", [])
+                    # data_columns includes numeric cols at start; filter string locations
+                    locations = [c for c in cols if isinstance(c, str) and not c.replace('.', '', 1).isdigit() and c.islower()]
+                    # If heuristic fails, try taking items after first 4 columns
+                    if not locations and len(cols) > 4:
+                        locations = cols[4:]
+                    return sorted(locations)
+        except Exception:
+            pass
+
     return []
 
-locations = load_locations()
+# Use defaults; allow overriding via sidebar
+locations = load_locations(api_url, allow_local=use_local_fallback)
 
 if not locations:
-    st.error("❌ Cannot connect to backend API at " + API_URL)
-    st.info("Make sure the server is running: `python server.py`")
+    st.error("❌ Cannot find locations (backend may be down and no local fallback available)")
+    st.info("Start the backend in ../server: python server.py or enable local fallback")
 else:
     # Form
     with st.form("prediction_form"):
@@ -41,13 +93,13 @@ else:
         col1, col2 = st.columns(2)
         
         with col1:
-            location = st.selectbox("Location", locations)
-            bhk = st.number_input("BHK", min_value=1, max_value=10, value=2)
-            balcony = st.number_input("Balconies", min_value=0, max_value=10, value=1)
+            location = st.selectbox("Location", locations, key="location")
+            bhk = st.number_input("BHK", min_value=1, max_value=10, value=st.session_state.bhk, key="bhk")
+            balcony = st.number_input("Balconies", min_value=0, max_value=10, value=st.session_state.balcony, key="balcony")
         
         with col2:
-            total_sqft = st.number_input("Total Area (sq ft)", min_value=100.0, value=1000.0, step=100.0)
-            bath = st.number_input("Bathrooms", min_value=1, max_value=10, value=2)
+            total_sqft = st.number_input("Total Area (sq ft)", min_value=100.0, value=st.session_state.total_sqft, step=100.0, key="total_sqft")
+            bath = st.number_input("Bathrooms", min_value=1, max_value=10, value=st.session_state.bath, key="bath")
         
         submitted = st.form_submit_button("🔮 Predict Price", use_container_width=True)
     
@@ -56,7 +108,7 @@ else:
         try:
             with st.spinner("Calculating..."):
                 response = requests.post(
-                    f"{API_URL}/predict",
+                    f"{api_url}/predict",
                     json={
                         "location": location,
                         "total_sqft": total_sqft,

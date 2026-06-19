@@ -23,6 +23,10 @@ streamlit run app.py
 
 The app will open automatically at `http://localhost:8501`
 
+Notes:
+- The app includes a **Settings** sidebar where you can change the Backend API URL and enable a local fallback for locations.
+- Use the **Examples** buttons in the sidebar to quickly populate common property inputs.
+
 ## Features
 
 - Select from Bangalore locations
