@@ -8,7 +8,7 @@ import os
 st.set_page_config(
     page_title="Bangalore House Price Predictor",
     page_icon="🏠",
-    layout="centered"
+    layout="wide"
 )
 
 # API Configuration
@@ -17,6 +17,12 @@ API_URL = "http://localhost:8000"
 # Title
 st.title("🏠 Bangalore House Price Predictor")
 st.markdown("---")
+
+# Small about / instructions
+with st.expander("About this app", expanded=False):
+    st.write(
+        "Simple Streamlit UI for predicting Bangalore house prices. Choose a location, set property details, and click Predict."
+    )
 
 # Sidebar: settings and examples
 st.sidebar.title("Settings")
@@ -89,60 +95,85 @@ else:
     # Form
     with st.form("prediction_form"):
         st.subheader("Enter Property Details")
-        
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
-            location = st.selectbox("Location", locations, key="location")
+            # add a clear placeholder option so users must pick a real location
+            location_options = ["Select a location"] + locations
+            location = st.selectbox("Location", location_options, index=0, key="location")
             bhk = st.number_input("BHK", min_value=1, max_value=10, value=st.session_state.bhk, key="bhk")
             balcony = st.number_input("Balconies", min_value=0, max_value=10, value=st.session_state.balcony, key="balcony")
-        
+
         with col2:
-            total_sqft = st.number_input("Total Area (sq ft)", min_value=100.0, value=st.session_state.total_sqft, step=100.0, key="total_sqft")
+            total_sqft = st.number_input("Total Area (sq ft)", min_value=100.0, value=st.session_state.total_sqft, step=50.0, key="total_sqft")
             bath = st.number_input("Bathrooms", min_value=1, max_value=10, value=st.session_state.bath, key="bath")
-        
+
+        # quick inline validation hints
+        if total_sqft < bhk * 200:
+            st.warning("Entered area is small for the chosen BHK — please confirm the value.")
+
         submitted = st.form_submit_button("🔮 Predict Price", use_container_width=True)
     
     # Handle prediction
     if submitted:
-        try:
-            with st.spinner("Calculating..."):
-                response = requests.post(
-                    f"{api_url}/predict",
-                    json={
-                        "location": location,
-                        "total_sqft": total_sqft,
-                        "bhk": int(bhk),
-                        "bath": int(bath),
-                        "balcony": int(balcony)
-                    },
-                    timeout=10
-                )
-            
-            if response.status_code == 200:
-                result = response.json()
-                price = result['predicted_price']
-                
-                st.success("✅ Prediction Complete!")
-                st.markdown("---")
-                
-                # Display result
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Predicted Price", f"₹ {price:,.0f}")
-                with col2:
-                    st.metric("Location", location)
-                
-                st.markdown("---")
-                st.subheader("Property Summary")
-                
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Area", f"{total_sqft:,.0f} sq ft")
-                col2.metric("BHK", int(bhk))
-                col3.metric("Bathrooms", int(bath))
-                col4.metric("Balconies", int(balcony))
-            else:
-                st.error("❌ Prediction failed: " + response.json().get("detail", "Unknown error"))
-        
-        except requests.exceptions.RequestException as e:
-            st.error(f"❌ Error: {str(e)}")
+        # Guard: ensure a real location was selected
+        if location == "Select a location":
+            st.error("Please select a valid location before requesting a prediction.")
+        else:
+            try:
+                with st.spinner("Calculating..."):
+                    response = requests.post(
+                        f"{api_url}/predict",
+                        json={
+                            "location": location,
+                            "total_sqft": total_sqft,
+                            "bhk": int(bhk),
+                            "bath": int(bath),
+                            "balcony": int(balcony)
+                        },
+                        timeout=10
+                    )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    price = result.get('predicted_price')
+
+                    if price is None:
+                        st.error("✅ Prediction returned no price. Unexpected response format.")
+                    else:
+                        st.success("✅ Prediction Complete!")
+                        st.markdown("---")
+
+                        # Display result and additional metrics
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Predicted Price", f"₹ {price:,.0f}")
+                        with col2:
+                            st.metric("Location", location)
+
+                        # additional metric: price per sqft
+                        try:
+                            ppsq = price / float(total_sqft)
+                            st.metric("Price / sq ft", f"₹ {ppsq:,.0f}")
+                        except Exception:
+                            pass
+
+                        st.markdown("---")
+                        st.subheader("Property Summary")
+
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Area", f"{total_sqft:,.0f} sq ft")
+                        col2.metric("BHK", int(bhk))
+                        col3.metric("Bathrooms", int(bath))
+                        col4.metric("Balconies", int(balcony))
+                else:
+                    # try to show useful error details
+                    try:
+                        err = response.json().get("detail", response.text)
+                    except Exception:
+                        err = response.text
+                    st.error(f"❌ Prediction failed: {err}")
+
+            except requests.exceptions.RequestException as e:
+                st.error(f"❌ Error: {str(e)}")
